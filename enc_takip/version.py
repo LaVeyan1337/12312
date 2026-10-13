@@ -1,0 +1,2 @@
+APP_VERSION = "10.0.7"
+APP_NAME = "ENCTakip"
