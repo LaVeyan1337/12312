@@ -1,0 +1,12 @@
+# Çekirdek uygulama (backend/servis katmanı) sadece Python standart
+# kütüphanesini kullanır. Arayüz için tek bir gerçek bağımlılık var:
+
+customtkinter>=5.2
+
+# Test çalıştırmak isterseniz (opsiyonel):
+pytest>=7.0
+
+# Sistem tepsisine küçültme özelliği için (opsiyonel — kurulu değilse
+# uygulama bu özelliği sessizce devre dışı bırakır, çökmez):
+pystray>=0.19
+pillow>=10.0

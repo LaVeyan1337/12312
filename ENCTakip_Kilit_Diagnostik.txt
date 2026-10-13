@@ -1,0 +1,437 @@
+Proje klasoru: C:\Visual Studio Code\dilekce\CED_DosyaYonetim\ENCTakip_Mukemmel_Final_Logolu
+
+==============================================================================
+KAYNAK DOSYALAR
+==============================================================================
+
+--- enc_takip/lock_service.py ---
+... 
+183:         return None
+184: 
+185:     def _word_kilit_yolu(self) -> Optional[Path]:
+186:         klasor = self.s.dosya_yolu.parent
+187:         ad = self.s.dosya_adi
+188:         ad_tail = ad[2:] if ad.startswith("~$") else ad
+189: 
+190:         adaylar = [klasor / f"~${ad_tail}"]
+191:         if ad != ad_tail:
+192:             adaylar.append(klasor / f"~${ad}")
+193: 
+194:         for aday in adaylar:
+195:             try:
+196:                 if aday.exists():
+197:                     return aday
+198:             except OSError:
+199:                 pass
+200: 
+201:         # Fallback: klasördeki ~$ dosyalarýný hedef dosyanýn adýna göre tara.
+202:         try:
+203:             hedef = Path(ad_tail).stem.casefold()
+204:             hedef_tail = hedef[-8:]
+205:             for aday in klasor.glob("~$*"):
+206:                 try:
+207:                     if not aday.is_file():
+208:                         continue
+209:                     aday_ad = aday.name[2:] if aday.name.startswith("~$") else aday.name
+210:                     stem = Path(aday_ad).stem.casefold()
+211:                     if stem == hedef or (len(hedef_tail) == 8 and len(stem) >= 8 and stem[-8:] == hedef_tail):
+212:                         return aday
+213:                 except OSError:
+214:                     continue
+215:         except Exception:
+216:             pass
+217:         return None
+218: 
+219:     def _word_kilit_dosyasi_var_mi(self) -> bool:
+220:         return self._word_kilit_yolu() is not None
+221: 
+222:     @staticmethod
+223:     def _temiz_ad(metin: str) -> Optional[str]:
+224:         metin = metin.replace("\x00", " ").strip(" \t\r\n\x00")
+225:         if not metin:
+226:             return None
+227:         while metin and ord(metin[-1]) < 32:
+228:             metin = metin[:-1]
+229:         metin = metin.strip()
+230:         if not metin or len(metin) > 52:
+231:             return None
+232:         if any(ord(c) < 32 for c in metin):
+233:             return None
+234:         # Owner dosyasýndan gelen deðerin en az bir harf/rakam içermesi,
+235:         # ikili verinin rastgele printable olarak yorumlanmasýný engeller.
+236:         if not any(c.isalpha() or c.isdigit() for c in metin):
+237:             return None
+238:         return metin
+239: 
+240:     def _openfiles_owner_from_server(self) -> Optional[str]:
+241:         """Windows openfiles.exe ile UNC dosyasýnýn görünen kullanýcý adýný bul."""
+242:         if os.name != "nt":
+243:             return None
+244:         try:
+245:             full = str(self.s.dosya_yolu)
+246:             m = re.match(r"^\\\\([^\\]+)\\", full)
+247:             if not m:
+248:                 return None
+249:             server = "\\\\" + m.group(1)
+250:             target = Path(full).name.casefold()
+251: 
+252:             cp = subprocess.run(
+253:                 ["openfiles.exe", "/query", "/s", server, "/fo", "csv", "/nh"],
+254:                 capture_output=True,
+255:                 text=True,
+256:                 encoding="utf-8",
+257:                 errors="replace",
+258:                 timeout=8,
+259:                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+260:             )
+261:             rows = list(csv.reader(io.StringIO(cp.stdout or "")))
+262:             for row in rows:
+263:                 if not row:
+264:                     continue
+265:                 line = " | ".join(x.strip() for x in row if x.strip())
+266:                 if target not in line.casefold():
+267:                     continue
+268:                 for cell in row:
+269:                     cell = cell.strip()
+270:                     if not cell or cell.casefold() == target or len(cell) > 80:
+271:                         continue
+272:                     if not re.fullmatch(r"[A-Za-z0-9_.\\- ]+", cell):
+273:                         continue
+274:                     if cell.casefold() in {"system", "admin", "administrator", "everyone"}:
+275:                         continue
+276:                     return cell
+277:         except Exception:
+278:             pass
+279:         return None
+280: 
+281:     def _word_kilit_sahibi(self) -> Optional[str]:
+282:         """Word ~$ kilit dosyasýndan kullanýcý adýný oku.
+283: 
+284:         UNC/Synology dahil tüm yollar için doðrudan ~$ dosyasýný kullanýr.
+285:         Word açýlmaz; yalnýzca mevcut temp dosyasý okunur.
+286:         """
+287:         try:
+288:             yol = self._word_kilit_yolu()
+289:             if yol is None:
+290:                 return None
+291: 
+292:             veri = yol.read_bytes()
+293:             if len(veri) < 2:
+294:                 return None
+295: 
+296:             # Word'ün gerçek formatý: byte 54 = karakter sayýsý,
+297:             # byte 56'dan itibaren UTF-16-LE kullanýcý adý.
+298:             if len(veri) >= 56:
+299:                 n = veri[54]
+300:                 if 1 <= n <= 52 and len(veri) >= 56 + n * 2:
+301:                     raw = veri[56:56 + n * 2]
+302:                     try:
+303:                         aday = type(self)._owner_adi_temizle(
+304:                             raw.decode("utf-16le", errors="strict")
+305:                         )
+306:                         if aday:
+307:                             return aday
+308:                     except Exception:
+309:                         pass
+310: 
+311:             # Word sürüm/farklý format fallback'leri.
+312:             for start in (56, 58, 60, 0x100):
+313:                 if start >= len(veri) - 4:
+314:                     continue
+315:                 try:
+316:                     metin = veri[start:start + 120].decode(
+317:                         "utf-16le", errors="ignore"
+318:                     )
+319:                     metin = metin.split("\x00\x00", 1)[0]
+320:                     metin = metin.replace("\x00", "").strip()
+321:                     aday = type(self)._owner_adi_temizle(metin)
+322:                     if aday:
+323:                         return aday
+324:                 except Exception:
+325:                     continue
+326: 
+327:             # Eski ASCII fallback.
+328:             try:
+329:                 n = veri[0]
+330:                 if 1 <= n <= 52 and len(veri) >= 1 + n:
+331:                     raw = veri[1:1 + n]
+332:                     for enc in ("cp1254", "cp1252", "latin-1"):
+333:                         try:
+334:                             aday = type(self)._owner_adi_temizle(
+335:                                 raw.decode(enc, errors="strict")
+336:                             )
+337:                             if aday:
+338:                                 return aday
+339:                         except Exception:
+340:                             continue
+341:             except Exception:
+342:                 pass
+343:         except Exception as exc:
+344:             try:
+345:                 print(f"[WORD ~$ OWNER] {exc}")
+... 
+482:             return None
+483: 
+484:     def durum(self) -> DosyaDurumu:
+485:         if not self.s.ag_yolu or not Path(self.s.ag_yolu).exists():
+486:             return DosyaDurumu.BAGLANTI_YOK
+487:         if not self.s.dosya_yolu.exists():
+488:             return DosyaDurumu.DOSYA_YOK
+489: 
+490:         kayit = self.oku()
+491:         try:
+492:             fiziksel = bool(self._dosya_gercekten_kilitli_mi())
+493:         except Exception:
+494:             fiziksel = False
+495: 
+496:         if kayit is not None:
+497:             if fiziksel:
+498:                 return (
+499:                     DosyaDurumu.KULLANIMDA_BENDE
+500:                     if kayit.kullanici == KULLANICI
+501:                     else DosyaDurumu.KULLANIMDA_BASKASI
+502:                 )
+503:             # Hayalet ENCTakip kilidi: dosya artýk fiziksel olarak kilitli deðil.
+504:             try:
+505:                 self._sil_guvensiz()
+506:             except Exception:
+507:                 pass
+508:             return DosyaDurumu.MUSAIT
+509: 
+510:         if fiziksel:
+511:             return DosyaDurumu.BELIRSIZ
+512:         return DosyaDurumu.MUSAIT
+513: 
+514:     def zorla_birak_sonuc(self) -> tuple[bool, str]:
+515:         try:
+516:             if self._dosya_gercekten_kilitli_mi():
+517:                 sahibi = None
+518:                 try:
+519:                     sahibi = self._word_kilit_sahibi()
+520:                 except Exception:
+521:                     pass
+522:                 if sahibi:
+523:                     return False, (f"Dosya þu anda {sahibi} tarafýndan Word üzerinden kullanýmda. "
+524:                                    "Gerçek Windows kilidi kullanýcý tarafýndan kapatýlmadan kaldýrýlamaz.")
+525:                 return False, "Dosya þu anda Word/Windows tarafýndan gerçekten kilitli. Aktif kullanýcý kapatmadan kaldýrýlamaz."
+526:             program_ok = False
+527:             fn = getattr(self, "zorla_birak", None)
+528:             if callable(fn):
+529:                 try:
+530:                     program_ok = bool(fn())
+531:                 except Exception:
+532:                     pass
+533:             owner_removed = False
+534:             owner = self._word_kilit_yolu()
+535:             if owner is not None and not self._dosya_gercekten_kilitli_mi():
+536:                 try:
+537:                     if os.name == "nt":
+538:                         ctypes.windll.kernel32.SetFileAttributesW(str(owner), 0x80)
+539:                 except Exception:
+540:                     pass
+541:                 try:
+542:                     owner.unlink()
+543:                     owner_removed = True
+544:                 except OSError:
+545:                     pass
+546:             if program_ok or owner_removed:
+547:                 return True, "Eski/stale kilit kaydý temizlendi."
+548:             return False, "Kaldýrýlacak aktif ENCTakip kilidi bulunamadý."
+... 
+550:             return False, f"Kilit temizleme hatasý: {exc}"
+551: 
+552:     def al(self) -> bool:
+553:         if not self._hazir:
+554:             self._hazirla()
+555: 
+556:         # Gerçek Word/að kilidi varsa uygulama kilidini alamayýz.
+557:         if self._dosya_gercekten_kilitli_mi():
+558:             return False
+559: 
+560:         now = datetime.now().isoformat(timespec="seconds")
+561:         kayit = KilitKaydi(
+562:             kullanici=KULLANICI,
+563:             bilgisayar=BILGISAYAR,
+564:             acilis=now,
+565:             son_heartbeat=now,
+566:         )
+567: 
+568:         try:
+569:             fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+570:             try:
+571:                 with os.fdopen(fd, "w", encoding="utf-8") as f:
+572:                     json.dump(kayit.to_json(), f, ensure_ascii=False)
+573:             except Exception:
+574:                 os.close(fd)
+575:                 raise
+576:             self._gizle(self._lock_path)
+577:             return True
+578:         except FileExistsError:
+579:             return False
+580:         except OSError:
+581:             return False
+582: 
+583:     def heartbeat(self) -> None:
+584:         kayit = self.oku()
+585:         if kayit is None or kayit.kullanici != KULLANICI:
+586:             return
+587:         kayit.son_heartbeat = datetime.now().isoformat(timespec="seconds")
+588:         with contextlib.suppress(OSError):
+589:             self._lock_path.write_text(
+590:                 json.dumps(kayit.to_json(), ensure_ascii=False), encoding="utf-8"
+591:             )
+592: 
+593:     def birak(self) -> bool:
+594:         kayit = self.oku()
+595:         if kayit is None or kayit.kullanici != KULLANICI:
+596:             return False
+597:         return self._sil_guvensiz()
+598: 
+599:     def zorla_birak(self) -> bool:
+600:         return self._sil_guvensiz()
+601: 
+602:     def _sil_guvensiz(self) -> bool:
+603:         try:
+604:             if self._lock_path.exists():
+605:                 with contextlib.suppress(Exception):
+606:                     if os.name == "nt":
+607:                         ctypes.windll.kernel32.SetFileAttributesW(str(self._lock_path), 0x80)
+608:                 self._lock_path.unlink()
+609:             return True
+610:         except OSError:
+611:             return False
+
+--- tests/test_lock_service.py ---
+... 
+1: """
+2: Bu testler, `ag_yolu`nu geçici bir yerel klasöre yönlendirerek gerçek að
+3: paylaþýmý ya da Word olmadan kilit mantýðýný doðrular. Eski koddaki
+4: mantýðý GUI'den ayýrmanýn somut faydasý budur: artýk bunu test edebiliyoruz.
+5: """
+6: from pathlib import Path
+7: 
+8: import pytest
+9: 
+10: from enc_takip.config import Settings
+11: from enc_takip.lock_service import KilitServisi
+12: from enc_takip.models import DosyaDurumu
+13: 
+14: 
+15: @pytest.fixture
+16: def settings(tmp_path: Path) -> Settings:
+17:     dosya_klasoru = tmp_path / "paylasim"
+18:     dosya_klasoru.mkdir()
+19:     (dosya_klasoru / "test.docx").write_bytes(b"sahte-docx")
+20:     return Settings(
+21:         ag_yolu=str(tmp_path),
+22:         dosya_klasoru="paylasim",
+23:         dosya_adi="test.docx",
+24:         kilit_olu_esigi_sn=1,
+25:     )
+26: 
+27: 
+28: def test_bos_dosya_musait_gorunur(settings: Settings) -> None:
+29:     servis = KilitServisi(settings)
+30:     assert servis.durum() == DosyaDurumu.MUSAIT
+31: 
+32: 
+33: def test_kilit_alinca_kullanimda_gorunur(settings: Settings) -> None:
+34:     servis = KilitServisi(settings)
+35:     assert servis.al() is True
+36:     assert servis.durum() == DosyaDurumu.KULLANIMDA_BENDE
+37: 
+38: 
+39: def test_ayni_kilit_iki_kez_alinamaz(settings: Settings) -> None:
+40:     """Atomik kilitlemenin doðrudan kanýtý: ikinci `al()` baþarýsýz olmalý."""
+41:     servis1 = KilitServisi(settings)
+42:     servis2 = KilitServisi(settings)
+43: 
+44:     assert servis1.al() is True
+45:     assert servis2.al() is False  # ayný anda ikinci kullanýcý kilidi alamamalý
+46: 
+47: 
+48: def test_birakilan_kilit_musait_olur(settings: Settings) -> None:
+49:     servis = KilitServisi(settings)
+50:     servis.al()
+51:     servis.birak()
+52:     assert servis.durum() == DosyaDurumu.MUSAIT
+53: 
+54: 
+55: def test_hayalet_kilit_word_dosyasi_yoksa_kendini_temizler(settings: Settings, monkeypatch) -> None:
+56:     """
+57:     Ekran görüntüsünde yaþadýðýn sorunun testi: heartbeat eskimiþ VE
+58:     Word'ün ~$ dosyasý yoksa (format/çökme sonrasý), kilit kendini
+59:     otomatik temizlemeli.
+60:     """
+61:     import time
+62: 
+63:     servis = KilitServisi(settings)
+64:     servis.al()
+65: 
+66:     # heartbeat'in "çok eski" sayýlmasý için eþik deðerini geçecek kadar bekle
+67:     time.sleep(1.2)
+68: 
+69:     # Word'ün ~$ dosyasý hiç yok (gerçek senaryoda: PC formatlandý, Word hiç kapanmadý)
+70:     assert servis.durum() == DosyaDurumu.MUSAIT
+71: 
+72: 
+73: def test_word_disaridan_acilmissa_belirsiz_gosterilir(settings: Settings) -> None:
+74:     """
+75:     Uygulama kilidi yok ama Word'ün ~$ dosyasý varsa: kim olduðunu tahmin
+76:     etmiyoruz, dürüstçe 'belirsiz' diyoruz.
+77:     """
+78:     klasor = Path(settings.ag_yolu) / settings.dosya_klasoru
+79:     (klasor / f"~${settings.dosya_adi}").write_bytes(b"word-lock-dummy")
+80: 
+81:     servis = KilitServisi(settings)
+82:     assert servis.durum() == DosyaDurumu.MUSAIT
+
+==============================================================================
+KILIT SERVISI TEKRAR URETIM TESTI
+==============================================================================
+
+==============================================================================
+TEST SENARYOSU: kilit_olu_esigi_sn=1
+==============================================================================
+KilitServisi modulu: C:\Visual Studio Code\dilekce\CED_DosyaYonetim\ENCTakip_Mukemmel_Final_Logolu\enc_takip\lock_service.py
+Sistem klasoru: C:\Users\Burak\AppData\Local\Temp\enctakip_lock_diag_jtauiusu\.encev_sistem
+Kilit dosyasi: C:\Users\Burak\AppData\Local\Temp\enctakip_lock_diag_jtauiusu\.encev_sistem\kilit.json
+Esik saniye: 1
+Baslangicta kilit var mi: False
+al() sonucu: True
+al() geçen süre (sn): 0.007104
+al() sonrasý kilit var mý: True
+al() sonrasý kilit içeriði:
+{"kullanici": "Burak", "bilgisayar": "DESKTOP-FA22QQU", "acilis": "2026-10-12T15:32:21", "son_heartbeat": "2026-10-12T15:32:21"}
+durum() sonucu repr: <DosyaDurumu.MUSAIT: 'musait'>
+durum() tipi: DosyaDurumu
+durum() geçen süre (sn): 0.000515
+durum() sonrasý kilit var mý: False
+durum() sonrasýnda kilit dosyasý SÝLÝNMÝÞ veya yok.
+
+==============================================================================
+TEST SENARYOSU: kilit_olu_esigi_sn=60
+==============================================================================
+KilitServisi modulu: C:\Visual Studio Code\dilekce\CED_DosyaYonetim\ENCTakip_Mukemmel_Final_Logolu\enc_takip\lock_service.py
+Sistem klasoru: C:\Users\Burak\AppData\Local\Temp\enctakip_lock_diag_nvdi22wb\.encev_sistem
+Kilit dosyasi: C:\Users\Burak\AppData\Local\Temp\enctakip_lock_diag_nvdi22wb\.encev_sistem\kilit.json
+Esik saniye: 60
+Baslangicta kilit var mi: False
+al() sonucu: True
+al() geçen süre (sn): 0.002953
+al() sonrasý kilit var mý: True
+al() sonrasý kilit içeriði:
+{"kullanici": "Burak", "bilgisayar": "DESKTOP-FA22QQU", "acilis": "2026-10-12T15:32:21", "son_heartbeat": "2026-10-12T15:32:21"}
+durum() sonucu repr: <DosyaDurumu.MUSAIT: 'musait'>
+durum() tipi: DosyaDurumu
+durum() geçen süre (sn): 0.000411
+durum() sonrasý kilit var mý: False
+durum() sonrasýnda kilit dosyasý SÝLÝNMÝÞ veya yok.
+
+==============================================================================
+TEK TESTI AYRICA CALISTIRMA KOMUTU
+==============================================================================
+cd /d "C:\Visual Studio Code\dilekce\CED_DosyaYonetim\ENCTakip_Mukemmel_Final_Logolu"
+py -3 -m pytest -vv -s tests\test_lock_service.py::test_kilit_alinca_kullanimda_gorunur
+
+NOT: Bu betik proje kaynak dosyalarini yazmaz. Test kilitlerini yalnizca gecici klasorde olusturur.

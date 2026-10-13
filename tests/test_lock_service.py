@@ -1,0 +1,82 @@
+"""
+Bu testler, `ag_yolu`nu geçici bir yerel klasöre yönlendirerek gerçek ağ
+paylaşımı ya da Word olmadan kilit mantığını doğrular. Eski koddaki
+mantığı GUI'den ayırmanın somut faydası budur: artık bunu test edebiliyoruz.
+"""
+from pathlib import Path
+
+import pytest
+
+from enc_takip.config import Settings
+from enc_takip.lock_service import KilitServisi
+from enc_takip.models import DosyaDurumu
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> Settings:
+    dosya_klasoru = tmp_path / "paylasim"
+    dosya_klasoru.mkdir()
+    (dosya_klasoru / "test.docx").write_bytes(b"sahte-docx")
+    return Settings(
+        ag_yolu=str(tmp_path),
+        dosya_klasoru="paylasim",
+        dosya_adi="test.docx",
+        kilit_olu_esigi_sn=1,
+    )
+
+
+def test_bos_dosya_musait_gorunur(settings: Settings) -> None:
+    servis = KilitServisi(settings)
+    assert servis.durum() == DosyaDurumu.MUSAIT
+
+
+def test_kilit_alinca_kullanimda_gorunur(settings: Settings) -> None:
+    servis = KilitServisi(settings)
+    assert servis.al() is True
+    assert servis.durum() == DosyaDurumu.KULLANIMDA_BENDE
+
+
+def test_ayni_kilit_iki_kez_alinamaz(settings: Settings) -> None:
+    """Atomik kilitlemenin doğrudan kanıtı: ikinci `al()` başarısız olmalı."""
+    servis1 = KilitServisi(settings)
+    servis2 = KilitServisi(settings)
+
+    assert servis1.al() is True
+    assert servis2.al() is False  # aynı anda ikinci kullanıcı kilidi alamamalı
+
+
+def test_birakilan_kilit_musait_olur(settings: Settings) -> None:
+    servis = KilitServisi(settings)
+    servis.al()
+    servis.birak()
+    assert servis.durum() == DosyaDurumu.MUSAIT
+
+
+def test_hayalet_kilit_word_dosyasi_yoksa_kendini_temizler(settings: Settings, monkeypatch) -> None:
+    """
+    Ekran görüntüsünde yaşadığın sorunun testi: heartbeat eskimiş VE
+    Word'ün ~$ dosyası yoksa (format/çökme sonrası), kilit kendini
+    otomatik temizlemeli.
+    """
+    import time
+
+    servis = KilitServisi(settings)
+    servis.al()
+
+    # heartbeat'in "çok eski" sayılması için eşik değerini geçecek kadar bekle
+    time.sleep(1.2)
+
+    # Word'ün ~$ dosyası hiç yok (gerçek senaryoda: PC formatlandı, Word hiç kapanmadı)
+    assert servis.durum() == DosyaDurumu.MUSAIT
+
+
+def test_word_disaridan_acilmissa_belirsiz_gosterilir(settings: Settings) -> None:
+    """
+    Uygulama kilidi yok ama Word'ün ~$ dosyası varsa: kim olduğunu tahmin
+    etmiyoruz, dürüstçe 'belirsiz' diyoruz.
+    """
+    klasor = Path(settings.ag_yolu) / settings.dosya_klasoru
+    (klasor / f"~${settings.dosya_adi}").write_bytes(b"word-lock-dummy")
+
+    servis = KilitServisi(settings)
+    assert servis.durum() == DosyaDurumu.MUSAIT

@@ -1,0 +1,50 @@
+ENCTakip tum dogrulama raporu
+Proje: C:\Visual Studio Code\dilekce\CED_DosyaYonetim\ENCTakip_Mukemmel_Final_Logolu
+Tarih: Pzt 12.10.2026 15:29:51,99
+
+========== 1/4 YAMA VE SURUM ==========
+VAR: enc_takip\updater.py
+VAR: enc_takip\eced_lock_service.py
+VAR: enc_takip\update_service.py
+VAR: enc_takip\gui\app.py
+VAR: build.bat
+VAR: publish.bat
+VAR: installer\ENCTakip.iss
+VAR: tests\test_update_service.py
+VAR: tests\test_eced_lock_service.py
+VAR: tests\test_updater_safety.py
+APP_VERSION = "10.0.6"
+
+========== 2/4 COMPILEALL ==========
+COMPILEALL: BASARILI
+
+========== 3/4 PYTEST TAM SUITE ==========
+..........F..............                                                [100%]
+================================== FAILURES ===================================
+____________________ test_kilit_alinca_kullanimda_gorunur _____________________
+
+settings = Settings(sirket_adi='ENÇEV', sirket_alt='Çevre Danýþmanlýk', ag_yolu='C:\\Users\\Burak\\AppData\\Local\\Temp\\pytest-o...eticiler='burak', tarama_araligi_sn=4, heartbeat_araligi_sn=20, kilit_olu_esigi_sn=1, hareketsizlik_uyari_esigi_sn=240)
+
+    def test_kilit_alinca_kullanimda_gorunur(settings: Settings) -> None:
+        servis = KilitServisi(settings)
+        assert servis.al() is True
+>       assert servis.durum() == DosyaDurumu.KULLANIMDA_BENDE
+E       AssertionError: assert <DosyaDurumu.MUSAIT: 'musait'> == <DosyaDurumu....animda_bende'>
+E         
+E         - kullanimda_bende
+E         + musait
+
+tests\test_lock_service.py:36: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_lock_service.py::test_kilit_alinca_kullanimda_gorunur - Ass...
+1 failed, 24 passed in 1.51s
+PYTEST: BASARISIZ
+
+========== 4/4 YEDEK VE CIKTILAR ==========
+Ana EXE VAR: 34144062 bayt
+Updater EXE YOK - bu kontrolde derleme yapilmaz
+Kurulum EXE YOK - bu kontrolde derleme yapilmaz
+Yama yedek klasorleri:
+.ENCTakip_yama_yedegi_20261012_152653
+
+NOT: Bu betik build veya publish calistirmaz. Bu rapor Windows GUI/SMB yayin testinin yerine gecmez.

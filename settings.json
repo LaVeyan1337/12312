@@ -1,0 +1,14 @@
+﻿{
+    "sirket_adi":  "ENÃ‡EV",
+    "sirket_alt":  "Ã‡evre DanÄ±ÅŸmanlÄ±k",
+    "ag_yolu":  "\\\\192.168.1.55\\Genel Evrak",
+    "dosya_klasoru":  "______DÄ°LEKÃ‡ELERÄ°MÄ°Z\\2026 DÄ°LEKÃ‡ELER",
+    "dosya_adi":  "DÄ°LEKÃ‡ELERÄ°MÄ°Z 2026.docx",
+    "yoneticiler":  [
+                        "burak"
+                    ],
+    "tarama_araligi_sn":  4,
+    "heartbeat_araligi_sn":  20,
+    "kilit_olu_esigi_sn":  90,
+    "hareketsizlik_uyari_esigi_sn":  240
+}
